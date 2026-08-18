@@ -1,0 +1,57 @@
+{
+  "session_id": "exam_1786950946",
+  "candidate_name": "Student_02",
+  "start_time": "2026-08-17T12:45:46.321258",
+  "end_time": "2026-08-17T12:49:46.713258",
+  "duration_seconds": 240.4,
+  "evidence_mode": "both",
+  "summary_counts": {
+    "total_violations": 3,
+    "looked_left": 1,
+    "looked_right": 0,
+    "looked_up": 0,
+    "looked_down": 0,
+    "repeated_peeking": 1,
+    "cell_phone": 0,
+    "multiple_people": 1,
+    "no_face": 0,
+    "unauthorized_device": 0
+  },
+  "events": [
+    {
+      "id": 1,
+      "timestamp": "2026-08-17T12:45:48.766283",
+      "elapsed_seconds": 2.4,
+      "type": "MULTIPLE_PEOPLE",
+      "direction": "NONE",
+      "message": "Multiple people (2) detected in camera view",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786950946_photo_1.jpg",
+      "video_file": "iterations\\exam_1786950946_1.webm"
+    },
+    {
+      "id": 2,
+      "timestamp": "2026-08-17T12:46:08.651951",
+      "elapsed_seconds": 22.3,
+      "type": "REPEATED_PEEKING_ANOMALY",
+      "direction": "RIGHT",
+      "message": "Frequent peeking anomaly: Candidate glanced off-screen 8 times in 1 minute (primarily to the RIGHT)",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786950946_photo_2.jpg",
+      "video_file": "iterations\\exam_1786950946_2.webm"
+    },
+    {
+      "id": 3,
+      "timestamp": "2026-08-17T12:46:26.422125",
+      "elapsed_seconds": 40.1,
+      "type": "GAZE_LOOK_LEFT",
+      "direction": "LEFT",
+      "message": "Candidate looked off-screen to the LEFT for 5.0s",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786950946_photo_3.jpg",
+      "video_file": "iterations\\exam_1786950946_3.webm"
+    }
+  ],
+  "full_video": "full_video\\exam_1786950946.webm",
+  "density_map": "sessions\\exam_1786950946\\density_map.png"
+}

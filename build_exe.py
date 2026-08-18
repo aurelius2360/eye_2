@@ -1,27 +1,10 @@
 import os
 import sys
-import urllib.request
-
-def download_if_missing(filename, url):
-    """Downloads model files if they are not already in the directory for bundling."""
-    if not os.path.exists(filename):
-        print(f"[Build] Model file '{filename}' not found. Downloading for bundle...")
-        try:
-            urllib.request.urlretrieve(url, filename)
-            print(f"[Build] Download complete: {filename}")
-        except Exception as e:
-            print(f"[Build] Error downloading {filename}: {e}")
-            sys.exit(1)
+from model_utils import ensure_model_file, FACE_LANDMARKER_URL, OBJECT_DETECTOR_URL
 
 # Ensure models are locally cached so they can be bundled inside the single EXE file
-download_if_missing(
-    "face_landmarker.task",
-    "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
-)
-download_if_missing(
-    "efficientdet_lite0.tflite",
-    "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite"
-)
+ensure_model_file("face_landmarker.task", FACE_LANDMARKER_URL)
+ensure_model_file("efficientdet_lite0.tflite", OBJECT_DETECTOR_URL)
 
 # Try running PyInstaller
 try:
@@ -50,18 +33,15 @@ pyinstaller_args = [
     '--name=EyePupilTracker',
     '--add-data=face_landmarker.task;.',
     '--add-data=efficientdet_lite0.tflite;.',
+    '--add-data=static;static',
 ] + ffmpeg_add_data + [
-    '--hidden-import=ObjectDetectorWrapper',
     '--hidden-import=PreRollPostRollRecorder',
+    '--hidden-import=model_utils',
     '--hidden-import=DeviceProctorScanner',
-    '--hidden-import=bleak',
-    '--hidden-import=winrt',
     '--hidden-import=mediapipe',
     '--hidden-import=cv2',
-    '--hidden-import=ffmpeg',
 ]
 
 PyInstaller.__main__.run(pyinstaller_args)
 
-print("\n[Build] Build complete! You can find your standalone executable inside the 'dist' folder:")
-print("[Build] -> dist/EyePupilTracker.exe")
+print("\n[Build] Build complete! Standalone executable inside 'dist/EyePupilTracker.exe'")

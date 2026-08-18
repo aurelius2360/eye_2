@@ -1,0 +1,13 @@
+# Core Computer Vision & AI Inference
+opencv-python>=4.8.0
+mediapipe>=0.10.14
+numpy>=1.24.0
+
+# Video Compression & FFmpeg Binary
+imageio-ffmpeg>=0.4.9
+
+# Peripheral & Bluetooth Device Proctored Scanning (Optional)
+bleak>=0.21.0
+
+# Standalone Executable Packaging (Optional)
+pyinstaller>=6.0.0

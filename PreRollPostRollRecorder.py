@@ -1,324 +1,417 @@
 import os
 import sys
 import time
-import collections
+import json
+import shutil
+import subprocess
+from collections import deque, Counter
+import datetime
 import cv2
-import ffmpeg
-import numpy as np
 
-# 1. GLOBAL STATE & BUFFERING
-# Rolling buffer for pre-roll (300 frames representing 10 seconds of history at 30 FPS)
-history_buffer = collections.deque(maxlen=300)
+from model_utils import get_resource_path
 
-# Global variables tracking cheat recording status
+CONFIG_FILE = "proctor_config.json"
+ACTIVE_SESSION_FILE = os.path.join("sessions", "active_session.json")
+
+def load_config():
+    """Loads configuration from proctor_config.json with safe defaults."""
+    default_cfg = {
+        "evidence_mode": "both",  # "video", "photo", "both"
+        "capture_full_exam_video": True,
+        "gaze_away_threshold_sec": 3.0,
+        "threshold_left_x": -0.12,
+        "threshold_right_x": 0.12,
+        "threshold_y": 0.09,
+        "device_audit_interval_sec": 600.0,
+        "candidate_name": "Student_01"
+    }
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                default_cfg.update(json.load(f))
+        except Exception as e:
+            print(f"[Config] Error reading {CONFIG_FILE}: {e}")
+    return default_cfg
+
+def save_config(cfg):
+    """Saves configuration to proctor_config.json."""
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"[Config] Error saving {CONFIG_FILE}: {e}")
+        return False
+
+
+def find_local_ffmpeg():
+    """Locates the FFmpeg binary via PATH, bundled path, or imageio_ffmpeg."""
+    system_path = shutil.which("ffmpeg")
+    if system_path:
+        return system_path
+
+    for name in ["ffmpeg.exe", "ffmpeg"]:
+        bundled = get_resource_path(name)
+        if os.path.isfile(bundled):
+            return bundled
+
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        pass
+
+    return "ffmpeg"
+
+
+# --- GLOBAL STATE & BUFFERING ---
+history_buffer = deque(maxlen=300) # 10s pre-roll at 30 FPS
+
 is_recording_cheat = False
 cheat_record_frames_left = 0
 cheat_events_to_process = []
 video_writer = None
 current_cheat_file = ""
 
-# Full exam recording (Type 1) variables
 full_exam_writer = None
 full_exam_file = ""
 exam_start_time = 0.0
 
-# Base name and counter for folder and file organization
 exam_base_name = ""
 anomaly_count = 0
+photo_count = 0
+
+session_dir = ""
+session_events = []
+current_config = load_config()
 
 
-def find_local_ffmpeg():
+def start_full_exam_recording(frame_width, frame_height, candidate_name=None):
     """
-    Dynamically searches the current working directory, subdirectories,
-    and PyInstaller temporary folder for a local FFmpeg executable.
-    Falls back to imageio_ffmpeg wrapper if installed.
+    Initializes continuous full-exam recording and sets up self-contained session directory.
     """
-    # 1. If running as a bundled PyInstaller executable, check temp directory first
-    if hasattr(sys, '_MEIPASS'):
-        for name in ["ffmpeg.exe", "ffmpeg"]:
-            path = os.path.join(sys._MEIPASS, name)
-            if os.path.exists(path) and os.path.isfile(path):
-                return path
+    global full_exam_writer, full_exam_file, exam_start_time, exam_base_name, anomaly_count, photo_count
+    global session_dir, session_events, current_config
 
-    cwd = os.path.abspath(".")
-    # 2. Check current directory root
-    for name in ["ffmpeg.exe", "ffmpeg"]:
-        path = os.path.join(cwd, name)
-        if os.path.exists(path) and os.path.isfile(path):
-            return path
-            
-    # 3. Search subdirectories recursively
-    for root, dirs, files in os.walk(cwd):
-        # Skip virtualenv and git directories
-        if any(ignored in root.lower() for ignored in ["jk", "venv", ".git", "__pycache__"]):
-            continue
-        for name in ["ffmpeg.exe", "ffmpeg"]:
-            if name in files:
-                return os.path.join(root, name)
-                
-    # 4. Fallback to imageio_ffmpeg pre-compiled binary wrapper if available
-    try:
-        import imageio_ffmpeg
-        path = imageio_ffmpeg.get_ffmpeg_exe()
-        if os.path.exists(path):
-            return path
-    except ImportError:
-        pass
-        
-    return None
+    current_config = load_config()
+    if candidate_name is None:
+        candidate_name = current_config.get("candidate_name", "Student_01")
 
-
-# 2. LOGIC FOR THE LIVE CAMERA LOOP & TYPE INITIALIZATION
-def start_full_exam_recording(frame_width, frame_height):
-    """
-    Initializes the full-exam continuous recording (Type 1).
-    Saves raw files into the 'full_video' folder.
-    """
-    global full_exam_writer, full_exam_file, exam_start_time, exam_base_name, anomaly_count
-    
-    # Ensure folders exist
-    os.makedirs("full_video", exist_ok=True)
-    os.makedirs("iterations", exist_ok=True)
-    
     exam_start_time = time.time()
     exam_base_name = f"exam_{int(exam_start_time)}"
     anomaly_count = 0
+    photo_count = 0
+    session_events = []
+
+    # Ensure self-contained directory tree
+    session_dir = os.path.join("sessions", exam_base_name)
+    os.makedirs(os.path.join(session_dir, "photos"), exist_ok=True)
+    os.makedirs(os.path.join(session_dir, "videos"), exist_ok=True)
+
+    # Register active live session
+    active_meta = {
+        "session_id": exam_base_name,
+        "candidate_name": candidate_name,
+        "start_time": datetime.datetime.fromtimestamp(exam_start_time).isoformat(),
+        "is_live": True,
+        "session_dir": session_dir,
+        "evidence_mode": current_config.get("evidence_mode", "both")
+    }
+    try:
+        with open(ACTIVE_SESSION_FILE, "w", encoding="utf-8") as f:
+            json.dump(active_meta, f, indent=2)
+    except Exception as e:
+        print(f"[System] Error writing active session: {e}")
+
+    if current_config.get("capture_full_exam_video", True):
+        full_exam_file = os.path.join(session_dir, f"{exam_base_name}_full_raw.mp4")
+        print(f"[System] Starting Full Exam continuous recording: {full_exam_file}")
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        full_exam_writer = cv2.VideoWriter(full_exam_file, fourcc, 30.0, (frame_width, frame_height))
+    else:
+        full_exam_file = ""
+        full_exam_writer = None
+
+
+def update_live_telemetry(telemetry_data):
+    """
+    Writes live candidate telemetry and status to the session directory for the Admin Portal.
+    """
+    global session_dir, exam_base_name
+    if not session_dir:
+        return
     
-    full_exam_file = os.path.join("full_video", f"{exam_base_name}_raw.mp4")
-    print(f"[System] Starting continuous Type 1 Full Exam recording: {full_exam_file}")
-    
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    full_exam_writer = cv2.VideoWriter(full_exam_file, fourcc, 30.0, (frame_width, frame_height))
+    telemetry_file = os.path.join(session_dir, "live_telemetry.json")
+    try:
+        with open(telemetry_file, "w", encoding="utf-8") as f:
+            json.dump(telemetry_data, f)
+    except Exception:
+        pass
+
+
+def save_live_frames(candidate_frame, gaze_density_frame):
+    """
+    Saves the latest live frame and gaze density chart for real-time Admin streaming.
+    """
+    global session_dir
+    if not session_dir:
+        return
+    try:
+        if candidate_frame is not None:
+            cv2.imwrite(os.path.join(session_dir, "live_feed.jpg"), candidate_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if gaze_density_frame is not None:
+            cv2.imwrite(os.path.join(session_dir, "live_gaze.jpg"), gaze_density_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    except Exception:
+        pass
+
+
+def capture_violation_snapshot(frame, violation_title, details=""):
+    """
+    Captures a high-resolution snapshot with watermark directly into the session photos directory.
+    """
+    global photo_count, exam_base_name, session_dir
+    photo_count += 1
+
+    snap_frame = frame.copy()
+    h, w, _ = snap_frame.shape
+
+    # Render evidence metadata banner
+    cv2.rectangle(snap_frame, (0, h - 35), (w, h), (10, 10, 10), -1)
+    timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stamp_text = f"EVIDENCE #{photo_count} | {violation_title.upper()} | {timestamp_str}"
+    cv2.putText(snap_frame, stamp_text, (10, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 240), 1, cv2.LINE_AA)
+
+    rel_filename = f"{exam_base_name}_photo_{photo_count}.jpg"
+    session_photo_path = os.path.join(session_dir, "photos", rel_filename) if session_dir else rel_filename
+    cv2.imwrite(session_photo_path, snap_frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+
+    print(f"[System] Violation Snapshot #{photo_count} saved: {session_photo_path}")
+    return session_photo_path
 
 
 def trigger_cheat_recording(frame_width, frame_height, is_test_ending=False):
     """
-    Activates when a proctoring anomaly is triggered (Type 2).
-    Saves anomaly raw files into the 'iterations' folder using suffixes _1, _2, _3.
+    Triggers 10s pre-roll + 10s post-roll recording when an anomaly occurs.
     """
-    global is_recording_cheat, cheat_record_frames_left, video_writer, current_cheat_file, exam_start_time, exam_base_name, anomaly_count
-    
+    global is_recording_cheat, cheat_record_frames_left, video_writer, current_cheat_file
+    global exam_start_time, exam_base_name, anomaly_count, session_dir
+
     if is_recording_cheat:
-        print("[System] Warning: Anomaly recording already in progress. Trigger ignored.")
-        return
-        
-    # Ensure folders exist
-    os.makedirs("iterations", exist_ok=True)
-    
+        return ""
+
     anomaly_count += 1
-    # Use the same base name as the full video but suffix with 1, 2, 3 for anomalies
-    current_cheat_file = os.path.join("iterations", f"{exam_base_name}_{anomaly_count}_raw.mp4")
-    
-    # Initialize OpenCV VideoWriter targeting the raw .mp4 anomaly file
+    video_dir = os.path.join(session_dir, "videos") if session_dir else "videos"
+    os.makedirs(video_dir, exist_ok=True)
+    current_cheat_file = os.path.join(video_dir, f"{exam_base_name}_{anomaly_count}_raw.mp4")
+
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video_writer = cv2.VideoWriter(current_cheat_file, fourcc, 30.0, (frame_width, frame_height))
-    
+
     elapsed_time = time.time() - exam_start_time if exam_start_time > 0.0 else 0.0
-    
+
     if is_test_ending:
-        # Rule: End of test -> capture the BEFORE 10 seconds only (pre-roll dump and immediate finalize)
-        print(f"[System] End-of-Test Anomaly! Saving BEFORE 10 seconds (pre-roll) to {current_cheat_file}")
+        print(f"[System] End-of-Test Anomaly! Saving pre-roll history to {current_cheat_file}")
         for frame in list(history_buffer):
             video_writer.write(frame)
         video_writer.release()
         video_writer = None
         cheat_events_to_process.append(current_cheat_file)
-        
-    elif elapsed_time < 10.0:
-        # Rule: Start of test -> capture the NEXT 10 seconds only (post-roll live write, bypass pre-roll history)
-        print(f"[System] Start-of-Test Anomaly (Elapsed: {elapsed_time:.1f}s)! Saving NEXT 10 seconds (post-roll) to {current_cheat_file}")
-        is_recording_cheat = True
-        cheat_record_frames_left = 300
-        
     else:
-        # Normal Case: capture BOTH BEFORE 10 seconds (pre-roll) and NEXT 10 seconds (post-roll)
-        print(f"[System] Normal Anomaly! Saving BEFORE 10 seconds + NEXT 10 seconds to {current_cheat_file}")
+        # Write pre-roll buffer
         for frame in list(history_buffer):
             video_writer.write(frame)
         is_recording_cheat = True
         cheat_record_frames_left = 300
 
+    return current_cheat_file
+
+
+def record_violation_event(event_type, direction, message, frame, frame_width, frame_height, clip_density_img=None):
+    """
+    Central violation event dispatcher saving photo, video clip, and incident gaze density chart.
+    """
+    global session_events, current_config, exam_start_time, anomaly_count, exam_base_name, session_dir
+
+    mode = current_config.get("evidence_mode", "both").lower()
+    photo_file = ""
+    video_raw_file = ""
+    clip_density_path = ""
+
+    # 1. Snapshot
+    if mode in ["photo", "both"] and frame is not None:
+        title = f"{event_type} ({direction})" if direction != "NONE" else event_type
+        photo_file = capture_violation_snapshot(frame, title, message)
+
+    # 2. Incident Gaze Density Plot
+    if clip_density_img is not None and session_dir:
+        try:
+            ev_id = len(session_events) + 1
+            density_filename = f"{exam_base_name}_clip_{ev_id}_density.png"
+            clip_density_path = os.path.join(session_dir, "photos", density_filename)
+            cv2.imwrite(clip_density_path, clip_density_img)
+        except Exception as e:
+            print(f"[System] Error saving clip density map: {e}")
+
+    # 3. Video
+    if mode in ["video", "both"]:
+        video_raw_file = trigger_cheat_recording(frame_width, frame_height)
+
+    elapsed = time.time() - exam_start_time if exam_start_time > 0 else 0.0
+    expected_webm = video_raw_file.replace("_raw.mp4", ".webm") if video_raw_file else ""
+
+    event_entry = {
+        "id": len(session_events) + 1,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "elapsed_seconds": round(elapsed, 1),
+        "type": event_type,
+        "direction": direction,
+        "message": message,
+        "evidence_mode": mode,
+        "photo_file": photo_file,
+        "video_file": expected_webm,
+        "clip_density_map": clip_density_path
+    }
+    session_events.append(event_entry)
+    return event_entry
+
 
 def process_frame(frame):
     """
-    Processes a single frame inside the live monitoring loop.
-    - Appends the frame to history.
-    - Writes to the continuous full exam recording (Type 1) inside 'full_video'.
-    - Writes to active anomaly VideoWriter (Type 2) inside 'iterations' if active.
+    Buffers frames and writes to active full exam and anomaly recorders.
     """
     global is_recording_cheat, cheat_record_frames_left, video_writer, cheat_events_to_process, full_exam_writer
-    
-    # 1. Continuously append frame to rolling pre-roll buffer
+
     history_buffer.append(frame)
-    
-    # 2. Write to full exam video (Type 1)
+
     if full_exam_writer is not None and full_exam_writer.isOpened():
         full_exam_writer.write(frame)
-        
-    # 3. Write to anomaly video (Type 2) if currently recording
-    if is_recording_cheat:
-        if video_writer is not None and video_writer.isOpened():
-            video_writer.write(frame)
-            cheat_record_frames_left -= 1
-            
-            # Post-roll complete
-            if cheat_record_frames_left == 0:
-                video_writer.release()
-                video_writer = None
-                is_recording_cheat = False
-                cheat_events_to_process.append(current_cheat_file)
-                print(f"[System] Post-roll complete. Raw anomaly recording saved: {current_cheat_file}")
+
+    if is_recording_cheat and video_writer is not None and video_writer.isOpened():
+        video_writer.write(frame)
+        cheat_record_frames_left -= 1
+
+        if cheat_record_frames_left == 0:
+            video_writer.release()
+            video_writer = None
+            is_recording_cheat = False
+            cheat_events_to_process.append(current_cheat_file)
+            print(f"[System] Anomaly Video Clip complete: {current_cheat_file}")
 
 
-# 3. LOGIC FOR END-OF-EXAM HOOK & COMPRESSION
-def run_end_of_exam_compression():
+def run_end_of_exam_compression(summary_counts=None, density_map_img=None):
     """
-    Executes post-exam. Releases active writers, compresses raw .mp4 cache videos
-    and full exam raw recording into highly optimized VP9/WebM format inside
-    their respective folders (full_video and iterations), and purges raw cache files.
+    Closes video streams, compresses clips via FFmpeg into WebM, saves density map,
+    and writes session_meta.json.
     """
     global cheat_events_to_process, full_exam_writer, full_exam_file, video_writer
+    global session_dir, session_events, current_config, exam_start_time, exam_base_name
+
     compressed_files = []
-    
-    # Release any active writers
+
     if full_exam_writer is not None:
         full_exam_writer.release()
         full_exam_writer = None
-        
+
     if video_writer is not None:
         video_writer.release()
         video_writer = None
         if current_cheat_file and current_cheat_file not in cheat_events_to_process:
             cheat_events_to_process.append(current_cheat_file)
-            
-    # Gather all raw files to process with their correct destination paths
+
     raw_files_to_compress = []
+    final_full_video_path = ""
     if full_exam_file and os.path.exists(full_exam_file):
-        # Compress from full_video/exam_<timestamp>_raw.mp4 to full_video/exam_<timestamp>.webm
         dest_full = full_exam_file.replace("_raw.mp4", ".webm")
         raw_files_to_compress.append((full_exam_file, dest_full))
-        
+        final_full_video_path = dest_full
+
     for raw_file in cheat_events_to_process:
         if raw_file and os.path.exists(raw_file):
-            # Compress from iterations/exam_<timestamp>_<num>_raw.mp4 to iterations/exam_<timestamp>_<num>.webm
             dest_anomaly = raw_file.replace("_raw.mp4", ".webm")
             raw_files_to_compress.append((raw_file, dest_anomaly))
-            
-    # Dynamically locate the local FFmpeg binary or fallback to system path
-    ffmpeg_cmd = find_local_ffmpeg() or 'ffmpeg'
-    print(f"[System] Utilizing FFmpeg binary/path: '{ffmpeg_cmd}'")
-    
+
+    ffmpeg_cmd = find_local_ffmpeg()
+    print(f"[System] Compressing video evidence using FFmpeg: '{ffmpeg_cmd}'")
+
     for raw_file, webm_file in raw_files_to_compress:
-        print(f"[System] Compressing raw file '{raw_file}' to optimized '{webm_file}'...")
-        
         try:
-            # Construct the compression process graph using ffmpeg-python
-            stream = ffmpeg.input(raw_file)
-            
-            # Downscale resolution to 720p maximum (scale=-1:720)
-            stream = ffmpeg.filter(stream, 'scale', -1, 720)
-            
-            # Output options: VP9, CRF 35, 15 FPS, target video bitrate 4M
-            stream = ffmpeg.output(
-                stream,
-                webm_file,
-                vcodec='libvpx-vp9',
-                crf=35,
-                r=15,
-                **{'b:v': '4M'}
-            )
-            
-            # Run the process
-            ffmpeg.run(stream, cmd=ffmpeg_cmd, overwrite_output=True, quiet=True)
-            
-            # If compression succeeded, delete original raw file
+            cmd = [
+                ffmpeg_cmd, "-y",
+                "-i", raw_file,
+                "-vf", "scale=-1:720",
+                "-c:v", "libvpx-vp9",
+                "-crf", "35",
+                "-r", "15",
+                "-b:v", "4M",
+                webm_file
+            ]
+            flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, creationflags=flags)
+
             if os.path.exists(webm_file) and os.path.getsize(webm_file) > 0:
-                print(f"[System] Compression complete. Deleting raw file '{raw_file}' to save space...")
                 os.remove(raw_file)
                 compressed_files.append(webm_file)
-            else:
-                print(f"[System] Error: WebM output is empty or invalid for '{raw_file}'")
-                
         except Exception as e:
-            print(f"[System] Error compressing raw video '{raw_file}': {e}")
-            
-    # Clear the processing states
+            print(f"[System] Video compression error for '{raw_file}': {e}")
+
+    # Save overall exam density map
+    density_map_path = ""
+    if density_map_img is not None and session_dir:
+        density_map_path = os.path.join(session_dir, "density_map.png")
+        cv2.imwrite(density_map_path, density_map_img)
+
+    end_time = time.time()
+    duration = end_time - exam_start_time if exam_start_time > 0 else 0.0
+
+    if summary_counts is None:
+        direction_counts = Counter(e.get("direction") for e in session_events)
+        type_counts = Counter(e.get("type", "") for e in session_events)
+        summary_counts = {
+            "total_violations": len(session_events),
+            "looked_left": direction_counts.get("LEFT", 0),
+            "looked_right": direction_counts.get("RIGHT", 0),
+            "looked_up": direction_counts.get("UP", 0),
+            "looked_down": direction_counts.get("DOWN", 0),
+            "repeated_peeking": type_counts.get("REPEATED_PEEKING_ANOMALY", 0),
+            "cell_phone": sum(1 for e in session_events if "PHONE" in e.get("type", "")),
+            "multiple_people": sum(1 for e in session_events if "MULTIPLE" in e.get("type", "")),
+            "no_face": sum(1 for e in session_events if "NO_USER" in e.get("type", "") or "NO_FACE" in e.get("type", "")),
+            "unauthorized_device": sum(1 for e in session_events if "DEVICE" in e.get("type", ""))
+        }
+
+    meta_record = {
+        "session_id": exam_base_name,
+        "candidate_name": current_config.get("candidate_name", "Student_01"),
+        "start_time": datetime.datetime.fromtimestamp(exam_start_time).isoformat() if exam_start_time > 0 else datetime.datetime.now().isoformat(),
+        "end_time": datetime.datetime.fromtimestamp(end_time).isoformat(),
+        "duration_seconds": round(duration, 1),
+        "evidence_mode": current_config.get("evidence_mode", "both"),
+        "summary_counts": summary_counts,
+        "events": session_events,
+        "full_video": final_full_video_path,
+        "density_map": density_map_path
+    }
+
+    if session_dir:
+        meta_file = os.path.join(session_dir, "session_meta.json")
+        try:
+            with open(meta_file, "w", encoding="utf-8") as f:
+                json.dump(meta_record, f, indent=2)
+            print(f"[System] Session summary saved: {meta_file}")
+        except Exception as e:
+            print(f"[System] Error writing session metadata: {e}")
+
+    # Mark active session as finished
+    try:
+        if os.path.exists(ACTIVE_SESSION_FILE):
+            with open(ACTIVE_SESSION_FILE, "r", encoding="utf-8") as f:
+                act = json.load(f)
+            act["is_live"] = False
+            with open(ACTIVE_SESSION_FILE, "w", encoding="utf-8") as f:
+                json.dump(act, f, indent=2)
+    except Exception:
+        pass
+
     cheat_events_to_process = []
     full_exam_file = ""
     return compressed_files
-
-
-# --- SIMULATION BLOCK ---
-def run_simulation():
-    """
-    Demonstrates Type 1 and Type 2 recordings including:
-      - Continuous full exam recording inside 'full_video'
-      - Start-of-test anomaly trigger (next 10 seconds post-roll only) inside 'iterations'
-      - Normal anomaly trigger (both pre-roll and post-roll) inside 'iterations'
-      - End-of-test anomaly trigger (before 10 seconds pre-roll only) inside 'iterations'
-    """
-    print("\n================ STARTING MONITORING SIMULATION ================")
-    width, height = 640, 480
-    
-    # Initialize continuous full-exam recording
-    start_full_exam_recording(width, height)
-    
-    # Scenario 1: Start-of-test anomaly (triggered in the first 5 seconds / 150 frames)
-    print("\n--- Scenario 1: Start-of-Test Anomaly (First 5 seconds) ---")
-    for frame_idx in range(120):
-        dummy_frame = np.zeros((height, width, 3), dtype=np.uint8)
-        cv2.putText(dummy_frame, f"Frame {frame_idx:03d} (Start)", (50, height // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-        process_frame(dummy_frame)
-        
-    print("[Simulation] Anomaly triggered! (Only aftermath/next 10 seconds should be recorded)")
-    trigger_cheat_recording(width, height)
-    
-    # Process 320 aftermath frames to satisfy post-roll and return to normal monitoring
-    for frame_idx in range(120, 440):
-        dummy_frame = np.zeros((height, width, 3), dtype=np.uint8)
-        cv2.putText(dummy_frame, f"Frame {frame_idx:03d} (Post-roll 1)", (50, height // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-        process_frame(dummy_frame)
-
-    # Scenario 2: Normal anomaly (triggered after 10+ seconds / 300+ frames of activity)
-    print("\n--- Scenario 2: Normal Anomaly (Middle of Exam) ---")
-    # Feed more frames to build history
-    for frame_idx in range(440, 800):
-        dummy_frame = np.zeros((height, width, 3), dtype=np.uint8)
-        cv2.putText(dummy_frame, f"Frame {frame_idx:03d} (Normal)", (50, height // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-        process_frame(dummy_frame)
-        
-    print("[Simulation] Anomaly triggered! (Both pre-roll and post-roll should be recorded)")
-    trigger_cheat_recording(width, height)
-    
-    # Process aftermath
-    for frame_idx in range(800, 1120):
-        dummy_frame = np.zeros((height, width, 3), dtype=np.uint8)
-        cv2.putText(dummy_frame, f"Frame {frame_idx:03d} (Post-roll 2)", (50, height // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-        process_frame(dummy_frame)
-
-    # Scenario 3: End-of-test anomaly (triggered right before the test completes)
-    print("\n--- Scenario 3: End-of-Test Anomaly (Exam Teardown) ---")
-    for frame_idx in range(1120, 1450):
-        dummy_frame = np.zeros((height, width, 3), dtype=np.uint8)
-        cv2.putText(dummy_frame, f"Frame {frame_idx:03d} (Ending)", (50, height // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-        process_frame(dummy_frame)
-        
-    print("[Simulation] Anomaly triggered at end of test! (Only before 10 seconds pre-roll should be saved)")
-    trigger_cheat_recording(width, height, is_test_ending=True)
-    
-    print(f"\n[Simulation] Raw cache recordings ready for processing: {cheat_events_to_process}")
-    
-    # Compress all recordings
-    print("\n[Simulation] Running final end-of-exam compression hook...")
-    webm_list = run_end_of_exam_compression()
-    print(f"[Simulation] Final WebM files ready for upload: {webm_list}")
-    print("================================================================\n")
-
-
-if __name__ == "__main__":
-    run_simulation()

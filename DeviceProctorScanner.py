@@ -1,12 +1,9 @@
 import asyncio
 import os
 import re
-import socket
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from collections import deque
 
 try:
     from bleak import BleakScanner
@@ -54,63 +51,20 @@ class DeviceProctorScanner:
     # ---------------------------------------------------------
     # 1. WI-FI & LOCAL NETWORK DISCOVERY
     # ---------------------------------------------------------
-    def _get_local_ip_subnet(self):
-        """Returns the local IP address and /24 subnet range."""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-            parts = local_ip.split(".")
-            subnet_prefix = f"{parts[0]}.{parts[1]}.{parts[2]}."
-            return local_ip, subnet_prefix
-        except Exception:
-            return "127.0.0.1", "192.168.1."
-
-    def _ping_ip(self, ip):
-        """Sends a quick socket ping / connection test to warm ARP table."""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.05)
-            # Try port 80 or 445 quick connect
-            sock.connect_ex((ip, 80))
-            sock.close()
-        except Exception:
-            pass
-
-    def _warm_arp_cache(self, subnet_prefix):
-        """Pings subnet hosts in parallel to update Windows ARP table quickly."""
-        with ThreadPoolExecutor(max_workers=50) as executor:
-            ips = [f"{subnet_prefix}{i}" for i in range(1, 255)]
-            executor.map(self._ping_ip, ips)
-
     def scan_wifi_network(self):
         """
-        Scans local Wi-Fi network using ARP cache analysis and returns list of (IP, MAC) pairs.
-        Also scans nearby SSIDs/BSSIDs via netsh on Windows.
+        Scans local network devices via system ARP table and nearby SSIDs/BSSIDs via netsh.
         """
-        _, subnet_prefix = self._get_local_ip_subnet()
-        # Warm up ARP table in parallel
-        self._warm_arp_cache(subnet_prefix)
-
         wifi_devices = {}  # MAC -> IP mapping
         ssids = set()
 
-        # Parse ARP table output
+        # Parse ARP table output (IP -> MAC)
         try:
             output = subprocess.check_output(["arp", "-a"], text=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-            mac_regex = re.compile(r'([0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2})')
-            ip_regex = re.compile(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})')
-
-            for line in output.splitlines():
-                ip_match = ip_regex.search(line)
-                mac_match = mac_regex.search(line)
-                if ip_match and mac_match:
-                    ip_str = ip_match.group(1)
-                    mac_str = mac_match.group(1).upper().replace('-', ':')
-                    # Ignore multicast/broadcast MAC addresses (01:00:5E, FF:FF:FF)
-                    if not mac_str.startswith("01:00:5E") and mac_str != "FF:FF:FF:FF:FF:FF":
-                        wifi_devices[mac_str] = ip_str
+            for ip, mac in re.findall(r'(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F\-]{17})', output):
+                mac_clean = mac.upper().replace('-', ':')
+                if not mac_clean.startswith("01:00:5E") and mac_clean != "FF:FF:FF:FF:FF:FF":
+                    wifi_devices[mac_clean] = ip
         except Exception as e:
             print(f"[DeviceScanner] ARP scan error: {e}")
 
@@ -119,14 +73,7 @@ class DeviceProctorScanner:
             try:
                 cmd_out = subprocess.check_output(["netsh", "wlan", "show", "networks", "mode=bssid"],
                                                  text=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
-                for line in cmd_out.splitlines():
-                    line_str = line.strip()
-                    if line_str.startswith("SSID") or line_str.startswith("BSSID"):
-                        parts = line_str.split(":", 1)
-                        if len(parts) == 2:
-                            val = parts[1].strip()
-                            if val and val != "1":
-                                ssids.add(val)
+                ssids = {m.strip() for m in re.findall(r'(?:SSID|BSSID)\s+\d*\s*:\s*(.+)', cmd_out) if m.strip() and m.strip() != "1"}
             except Exception:
                 pass
 

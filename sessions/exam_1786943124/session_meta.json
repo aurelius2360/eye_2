@@ -1,0 +1,78 @@
+{
+  "session_id": "exam_1786943124",
+  "candidate_name": "Student_01",
+  "start_time": "2026-08-17T10:35:24.530577",
+  "end_time": "2026-08-17T10:35:43.896807",
+  "duration_seconds": 19.4,
+  "evidence_mode": "photo",
+  "summary_counts": {
+    "total_violations": 5,
+    "looked_left": 0,
+    "looked_right": 0,
+    "looked_up": 0,
+    "looked_down": 0,
+    "cell_phone": 0,
+    "multiple_people": 3,
+    "no_face": 2,
+    "unauthorized_device": 0
+  },
+  "events": [
+    {
+      "id": 1,
+      "timestamp": "2026-08-17T10:35:24.727717",
+      "elapsed_seconds": 0.2,
+      "type": "MULTIPLE_PEOPLE",
+      "direction": "NONE",
+      "message": "Multiple people (2) detected in camera view",
+      "evidence_mode": "photo",
+      "photo_file": "snapshots\\exam_1786943124_photo_1.jpg",
+      "video_file": ""
+    },
+    {
+      "id": 2,
+      "timestamp": "2026-08-17T10:35:28.557772",
+      "elapsed_seconds": 4.0,
+      "type": "NO_USER_DETECTED",
+      "direction": "NONE",
+      "message": "Candidate left camera field of view",
+      "evidence_mode": "photo",
+      "photo_file": "snapshots\\exam_1786943124_photo_2.jpg",
+      "video_file": ""
+    },
+    {
+      "id": 3,
+      "timestamp": "2026-08-17T10:35:30.873194",
+      "elapsed_seconds": 6.3,
+      "type": "MULTIPLE_PEOPLE",
+      "direction": "NONE",
+      "message": "Multiple people (2) detected in camera view",
+      "evidence_mode": "photo",
+      "photo_file": "snapshots\\exam_1786943124_photo_3.jpg",
+      "video_file": ""
+    },
+    {
+      "id": 4,
+      "timestamp": "2026-08-17T10:35:33.852556",
+      "elapsed_seconds": 9.3,
+      "type": "NO_USER_DETECTED",
+      "direction": "NONE",
+      "message": "Candidate left camera field of view",
+      "evidence_mode": "photo",
+      "photo_file": "snapshots\\exam_1786943124_photo_4.jpg",
+      "video_file": ""
+    },
+    {
+      "id": 5,
+      "timestamp": "2026-08-17T10:35:36.859890",
+      "elapsed_seconds": 12.3,
+      "type": "MULTIPLE_PEOPLE",
+      "direction": "NONE",
+      "message": "Multiple people (2) detected in camera view",
+      "evidence_mode": "photo",
+      "photo_file": "snapshots\\exam_1786943124_photo_5.jpg",
+      "video_file": ""
+    }
+  ],
+  "full_video": "",
+  "density_map": "sessions\\exam_1786943124\\density_map.png"
+}

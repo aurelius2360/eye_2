@@ -1,0 +1,101 @@
+{
+  "session_id": "exam_1786947059",
+  "candidate_name": "Student_01",
+  "start_time": "2026-08-17T11:40:59.170043",
+  "end_time": "2026-08-17T11:44:23.508563",
+  "duration_seconds": 204.3,
+  "evidence_mode": "both",
+  "summary_counts": {
+    "total_violations": 7,
+    "looked_left": 0,
+    "looked_right": 2,
+    "looked_up": 0,
+    "looked_down": 0,
+    "repeated_peeking": 1,
+    "cell_phone": 0,
+    "multiple_people": 0,
+    "no_face": 4,
+    "unauthorized_device": 0
+  },
+  "events": [
+    {
+      "id": 1,
+      "timestamp": "2026-08-17T11:41:03.434386",
+      "elapsed_seconds": 4.3,
+      "type": "GAZE_LOOK_RIGHT",
+      "direction": "RIGHT",
+      "message": "Candidate looked off-screen to the RIGHT for 1.5s",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786947059_photo_1.jpg",
+      "video_file": "iterations\\exam_1786947059_1.webm"
+    },
+    {
+      "id": 2,
+      "timestamp": "2026-08-17T11:41:10.949913",
+      "elapsed_seconds": 11.8,
+      "type": "REPEATED_PEEKING_ANOMALY",
+      "direction": "RIGHT",
+      "message": "Suspicious frequent peeking: Candidate glanced off-screen 5 times in 30s (primarily to the RIGHT)",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786947059_photo_2.jpg",
+      "video_file": ""
+    },
+    {
+      "id": 3,
+      "timestamp": "2026-08-17T11:41:11.393985",
+      "elapsed_seconds": 12.2,
+      "type": "GAZE_LOOK_RIGHT",
+      "direction": "RIGHT",
+      "message": "Candidate looked off-screen to the RIGHT for 1.5s",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786947059_photo_3.jpg",
+      "video_file": ""
+    },
+    {
+      "id": 4,
+      "timestamp": "2026-08-17T11:41:13.123800",
+      "elapsed_seconds": 14.0,
+      "type": "NO_USER_DETECTED",
+      "direction": "NONE",
+      "message": "Candidate left camera field of view",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786947059_photo_4.jpg",
+      "video_file": ""
+    },
+    {
+      "id": 5,
+      "timestamp": "2026-08-17T11:41:17.809278",
+      "elapsed_seconds": 18.6,
+      "type": "NO_USER_DETECTED",
+      "direction": "NONE",
+      "message": "Candidate left camera field of view",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786947059_photo_5.jpg",
+      "video_file": ""
+    },
+    {
+      "id": 6,
+      "timestamp": "2026-08-17T11:41:22.065637",
+      "elapsed_seconds": 22.9,
+      "type": "NO_USER_DETECTED",
+      "direction": "NONE",
+      "message": "Candidate left camera field of view",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786947059_photo_6.jpg",
+      "video_file": "iterations\\exam_1786947059_2.webm"
+    },
+    {
+      "id": 7,
+      "timestamp": "2026-08-17T11:41:38.868451",
+      "elapsed_seconds": 39.7,
+      "type": "NO_USER_DETECTED",
+      "direction": "NONE",
+      "message": "Candidate left camera field of view",
+      "evidence_mode": "both",
+      "photo_file": "snapshots\\exam_1786947059_photo_7.jpg",
+      "video_file": "iterations\\exam_1786947059_3.webm"
+    }
+  ],
+  "full_video": "full_video\\exam_1786947059.webm",
+  "density_map": "sessions\\exam_1786947059\\density_map.png"
+}

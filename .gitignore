@@ -3,6 +3,10 @@ don't_touch/
 try/
 jk/
 full_video/
-EyePupilTracker.exe
-iteratons/
+iterations/
+snapshots/
+dist/
+build/
+*.spec
+*.exe
 *.docx

@@ -1,0 +1,10 @@
+{
+  "evidence_mode": "both",
+  "capture_full_exam_video": false,
+  "gaze_away_threshold_sec": 7,
+  "threshold_left_x": -0.12,
+  "threshold_right_x": 0.12,
+  "threshold_y": 0.09,
+  "device_audit_interval_sec": 600.0,
+  "candidate_name": "Student_03"
+}
